@@ -11,13 +11,13 @@ pip install -r requirements.txt
 ## 启动服务
 
 ```bash
-python main.py
+python app.py
 ```
 
 或者使用uvicorn：
 
 ```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
 服务将在 `http://localhost:8000` 启动
