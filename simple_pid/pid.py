@@ -20,6 +20,7 @@ class PID(object):
         setpoint=0,
         sample_time=0.01,
         output_limits=(None, None),
+        output_rate_limits=(None, None),
         auto_mode=True,
         proportional_on_measurement=False,
         differential_on_measurement=True,
@@ -28,43 +29,38 @@ class PID(object):
         starting_output=0.0,
     ):
         """
-        Initialize a new PID controller.
+        初始化一个新的PID控制器。
 
-        :param Kp: The value for the proportional gain Kp
-        :param Ki: The value for the integral gain Ki
-        :param Kd: The value for the derivative gain Kd
-        :param setpoint: The initial setpoint that the PID will try to achieve
-        :param sample_time: The time in seconds which the controller should wait before generating
-            a new output value. The PID works best when it is constantly called (eg. during a
-            loop), but with a sample time set so that the time difference between each update is
-            (close to) constant. If set to None, the PID will compute a new output value every time
-            it is called.
-        :param output_limits: The initial output limits to use, given as an iterable with 2
-            elements, for example: (lower, upper). The output will never go below the lower limit
-            or above the upper limit. Either of the limits can also be set to None to have no limit
-            in that direction. Setting output limits also avoids integral windup, since the
-            integral term will never be allowed to grow outside of the limits.
-        :param auto_mode: Whether the controller should be enabled (auto mode) or not (manual mode)
-        :param proportional_on_measurement: Whether the proportional term should be calculated on
-            the input directly rather than on the error (which is the traditional way). Using
-            proportional-on-measurement avoids overshoot for some types of systems.
-        :param differential_on_measurement: Whether the differential term should be calculated on
-            the input directly rather than on the error (which is the traditional way).
-        :param error_map: Function to transform the error value in another constrained value.
-        :param time_fn: The function to use for getting the current time, or None to use the
-            default. This should be a function taking no arguments and returning a number
-            representing the current time. The default is to use time.monotonic() if available,
-            otherwise time.time().
-        :param starting_output: The starting point for the PID's output. If you start controlling
-            a system that is already at the setpoint, you can set this to your best guess at what
-            output the PID should give when first calling it to avoid the PID outputting zero and
-            moving the system away from the setpoint.
+        :param Kp: 比例增益Kp的值
+        :param Ki: 积分增益Ki的值
+        :param Kd: 微分增益Kd的值
+        :param setpoint: PID控制器试图达到的初始设定值
+        :param sample_time: 控制器在生成新输出值之前应等待的时间（秒）。PID在持续调用时（例如在循环中）
+            效果最佳，但需要设置采样时间，使得每次更新之间的时间差（接近）恒定。如果设置为None，
+            PID将在每次调用时计算新的输出值。
+        :param output_limits: 要使用的初始输出限制，给定为一个包含2个元素的迭代对象，例如：(lower, upper)。
+            输出永远不会低于下限或高于上限。任一限制也可以设置为None以在该方向上无限制。设置输出限制
+            还可以避免积分饱和，因为积分项永远不会被允许在限制范围外增长。
+        :param output_rate_limits: 要使用的输出变化率限制（变幅约束），给定为一个包含2个元素的迭代对象，
+            例如：(lower_rate, upper_rate)。输出变化率永远不会低于下限变化率或高于上限变化率（每单位时间）。
+            任一限制也可以设置为None以在该方向上无限制。这限制了输出可以变化的速度，对于无法处理控制信号
+            快速变化的系统很有用。
+        :param auto_mode: 控制器是否应启用（自动模式）或不启用（手动模式）
+        :param proportional_on_measurement: 比例项是否应直接在输入上计算，而不是在误差上计算（传统方式）。
+            使用基于测量的比例项可以避免某些类型系统的超调。
+        :param differential_on_measurement: 微分项是否应直接在输入上计算，而不是在误差上计算（传统方式）。
+        :param error_map: 用于将误差值转换为另一个约束值的函数。
+        :param time_fn: 用于获取当前时间的函数，或None以使用默认值。这应该是一个不接受参数并返回表示
+            当前时间的数字的函数。默认情况下，如果可用则使用time.monotonic()，否则使用time.time()。
+        :param starting_output: PID输出的起始点。如果您开始控制一个已经处于设定值的系统，可以将其设置为
+            您对PID首次调用时应给出的输出的最佳猜测，以避免PID输出零并将系统移离设定值。
         """
         self.Kp, self.Ki, self.Kd = Kp, Ki, Kd
         self.setpoint = setpoint
         self.sample_time = sample_time
 
         self._min_output, self._max_output = None, None
+        self._min_output_rate, self._max_output_rate = None, None
         self._auto_mode = auto_mode
         self.proportional_on_measurement = proportional_on_measurement
         self.differential_on_measurement = differential_on_measurement
@@ -93,6 +89,7 @@ class PID(object):
                 self.time_fn = time.time
 
         self.output_limits = output_limits
+        self.output_rate_limits = output_rate_limits
         self.reset()
 
         # Set initial state of the controller
@@ -152,6 +149,10 @@ class PID(object):
         output = self._proportional + self._integral + self._derivative
         output = _clamp(output, self.output_limits)
 
+        # Apply rate limits (变幅约束)
+        if self._last_output is not None:
+            output = self._apply_rate_limits(output, self._last_output, dt)
+
         # Keep track of state
         self._last_output = output
         self._last_input = input_
@@ -165,7 +166,8 @@ class PID(object):
             '{self.__class__.__name__}('
             'Kp={self.Kp!r}, Ki={self.Ki!r}, Kd={self.Kd!r}, '
             'setpoint={self.setpoint!r}, sample_time={self.sample_time!r}, '
-            'output_limits={self.output_limits!r}, auto_mode={self.auto_mode!r}, '
+            'output_limits={self.output_limits!r}, output_rate_limits={self.output_rate_limits!r}, '
+            'auto_mode={self.auto_mode!r}, '
             'proportional_on_measurement={self.proportional_on_measurement!r}, '
             'differential_on_measurement={self.differential_on_measurement!r}, '
             'error_map={self.error_map!r}'
@@ -249,6 +251,58 @@ class PID(object):
 
         self._integral = _clamp(self._integral, self.output_limits)
         self._last_output = _clamp(self._last_output, self.output_limits)
+
+    def _apply_rate_limits(self, output, last_output, dt):
+        """
+        Apply rate limits to the output change (应用变幅约束).
+
+        :param output: The desired output value
+        :param last_output: The previous output value
+        :param dt: The time step
+        :return: The output value constrained by rate limits
+        """
+        if dt <= 0:
+            return output
+
+        desired_change = output - last_output
+        max_change = None
+        min_change = None
+
+        if self._max_output_rate is not None:
+            max_change = self._max_output_rate * dt
+        if self._min_output_rate is not None:
+            min_change = self._min_output_rate * dt
+
+        if max_change is not None and desired_change > max_change:
+            return last_output + max_change
+        elif min_change is not None and desired_change < min_change:
+            return last_output + min_change
+
+        return output
+
+    @property
+    def output_rate_limits(self):
+        """
+        The current output rate limits as a 2-tuple: (lower_rate, upper_rate).
+
+        See also the *output_rate_limits* parameter in :meth:`PID.__init__`.
+        """
+        return self._min_output_rate, self._max_output_rate
+
+    @output_rate_limits.setter
+    def output_rate_limits(self, limits):
+        """Set the output rate limits."""
+        if limits is None:
+            self._min_output_rate, self._max_output_rate = None, None
+            return
+
+        min_rate, max_rate = limits
+
+        if (None not in limits) and (max_rate < min_rate):
+            raise ValueError('lower rate limit must be less than upper rate limit')
+
+        self._min_output_rate = min_rate
+        self._max_output_rate = max_rate
 
     def reset(self):
         """
