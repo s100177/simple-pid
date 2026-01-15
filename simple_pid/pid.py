@@ -27,6 +27,7 @@ class PID(object):
         error_map=None,
         time_fn=None,
         starting_output=0.0,
+        dead_zone=0.0,
     ):
         """
         初始化一个新的PID控制器。
@@ -54,10 +55,12 @@ class PID(object):
             当前时间的数字的函数。默认情况下，如果可用则使用time.monotonic()，否则使用time.time()。
         :param starting_output: PID输出的起始点。如果您开始控制一个已经处于设定值的系统，可以将其设置为
             您对PID首次调用时应给出的输出的最佳猜测，以避免PID输出零并将系统移离设定值。
+        :param dead_zone: 死区范围。当输出变化量小于此值时，不执行调整。用于避免频繁小幅振荡，保护执行机构。
         """
         self.Kp, self.Ki, self.Kd = Kp, Ki, Kd
         self.setpoint = setpoint
         self.sample_time = sample_time
+        self.dead_zone = dead_zone
 
         self._min_output, self._max_output = None, None
         self._min_output_rate, self._max_output_rate = None, None
@@ -152,6 +155,18 @@ class PID(object):
         # Apply rate limits (变幅约束)
         if self._last_output is not None:
             output = self._apply_rate_limits(output, self._last_output, dt)
+        elif self._integral != 0:
+            # 第一次调用时，如果积分项不为0（设置了starting_output），
+            # 则将输出限制在积分项附近，避免突变
+            output = self._apply_rate_limits(output, self._integral, dt)
+
+        # Apply dead zone (死区)
+        # 当输出变化量小于死区时，不调整输出
+        if self.dead_zone > 0 and self._last_output is not None:
+            output_change = abs(output - self._last_output)
+            if output_change < self.dead_zone:
+                # 输出变化量小于死区，不调整，保持上一次输出
+                output = self._last_output
 
         # Keep track of state
         self._last_output = output

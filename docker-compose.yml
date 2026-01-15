@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: simple-pid-api:latest
+    container_name: simple-pid-api
+    restart: unless-stopped
+
+    ports:
+      - "40002:8000"
+
+    environment:
+      - ENV=production
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - TZ=Asia/Shanghai
+      - PYTHONPATH=/app
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4g
+        reservations:
+          cpus: "0.5"
+          memory: 1g
+
+    # 启动命令，日志输出到文件
+    command: >
+      /bin/bash -c "cd /app/api && python app.py >> logs/app.log 2>&1"
+
+    volumes:
+      - ./logs:/app/api/logs
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+    security_opt:
+      - no-new-privileges:true
+
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=100m
+      - /run:rw,noexec,nosuid,size=50m
+
+    networks:
+      - app_net
+
+networks:
+  app_net:
+    driver: bridge
+

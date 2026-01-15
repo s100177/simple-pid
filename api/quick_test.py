@@ -6,7 +6,7 @@ import requests
 import json
 
 BASE_URL = "http://localhost:8000"
-
+BASE_URL = "http://58.87.80.234:40002"
 # 1. 创建PID控制器
 print("1. 创建PID控制器...")
 response = requests.post(f"{BASE_URL}/pid/create", json={

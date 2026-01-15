@@ -2,7 +2,18 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Tuple, Dict, Any
 import sys
-sys.path.append('..')
+import os
+
+# 添加项目根目录到Python路径（兼容本地开发和Docker环境）
+# Docker环境：/app/api/app.py -> project_root = /app (PYTHONPATH已设置为/app)
+# 本地环境：./api/app.py -> project_root = ./
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# 导入PID控制器
+# 在Docker中：PYTHONPATH=/app，simple_pid位于/app/simple_pid/
+# 在本地：project_root已添加到sys.path，simple_pid位于./simple_pid/
 from simple_pid.pid import PID
 
 app = FastAPI(title="PID Controller API", description="PID控制器API服务", version="1.0.0")
@@ -38,6 +49,7 @@ class PIDCreateRequest(BaseModel):
     proportional_on_measurement: bool = Field(default=False, description="比例项是否基于测量值")
     differential_on_measurement: bool = Field(default=True, description="微分项是否基于测量值")
     starting_output: float = Field(default=0.0, description="初始输出值")
+    dead_zone: float = Field(default=0.0, description="死区范围。当输出变化量小于此值时，不执行调整，用于降低震荡")
 
 
 class PIDUpdateRequest(BaseModel):
@@ -84,6 +96,60 @@ async def root():
     )
 
 
+@app.get("/health")
+async def health():
+    """健康检查端点"""
+    return {"status": "healthy"}
+
+
+@app.post("/pid/createPlus", response_model=BaseResponse)
+async def createPlus_pid_controller(request: PIDCreateRequest):
+    """
+    创建一个新的PID控制器
+    """
+    try:
+        # 检查控制器ID是否已存在
+        if request.controller_id in pid_controllers:
+            del pid_controllers[request.controller_id]
+        
+        # 创建PID控制器
+        pid = PID(
+            Kp=request.Kp,
+            Ki=request.Ki,
+            Kd=request.Kd,
+            setpoint=request.setpoint,
+            sample_time=request.sample_time,
+            output_limits=request.output_limits,
+            output_rate_limits=request.output_rate_limits,
+            auto_mode=request.auto_mode,
+            proportional_on_measurement=request.proportional_on_measurement,
+            differential_on_measurement=request.differential_on_measurement,
+            starting_output=request.starting_output,
+            dead_zone=request.dead_zone
+        )
+        
+        pid_controllers[request.controller_id] = pid
+        
+        return BaseResponse(
+            data={
+                "controller_id": request.controller_id,
+                "Kp": request.Kp,
+                "Ki": request.Ki,
+                "Kd": request.Kd,
+                "setpoint": request.setpoint
+            },
+            code=200,
+            message="PID控制器创建成功"
+        )
+    
+    except Exception as e:
+        return BaseResponse(
+            data=None,
+            code=500,
+            message=f"创建PID控制器失败: {str(e)}"
+        )
+
+
 @app.post("/pid/create", response_model=BaseResponse)
 async def create_pid_controller(request: PIDCreateRequest):
     """
@@ -110,7 +176,8 @@ async def create_pid_controller(request: PIDCreateRequest):
             auto_mode=request.auto_mode,
             proportional_on_measurement=request.proportional_on_measurement,
             differential_on_measurement=request.differential_on_measurement,
-            starting_output=request.starting_output
+            starting_output=request.starting_output,
+            dead_zone=request.dead_zone
         )
         
         pid_controllers[request.controller_id] = pid
@@ -424,5 +491,5 @@ async def list_pid_controllers():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=5000)
 
